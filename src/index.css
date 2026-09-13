@@ -274,3 +274,131 @@ th {
   padding: 2px 6px;
   font-size: 12px;
 }
+
+.add-bucket-toggle {
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.add-bucket-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 8px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background: #fafafa;
+}
+
+.add-bucket-form input,
+.add-bucket-form select {
+  width: 100%;
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.bucket-domain-group {
+  margin-bottom: 10px;
+}
+
+.bucket-domain-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  padding: 2px 0;
+}
+
+.disclosure {
+  display: inline-block;
+  width: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  color: #888;
+}
+
+.bucket-domain-body {
+  margin-top: 4px;
+}
+
+.bucket-node {
+  font-size: 13px;
+}
+
+.bucket-node-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.bucket-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.bucket-delete {
+  padding: 0 5px;
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.bucket-edit {
+  padding: 1px 6px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.bucket-form-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.bucket-form-actions button {
+  flex: 1;
+}
+
+.test-status {
+  font-size: 12px;
+  margin: 0;
+}
+
+.test-status-success {
+  color: #1a7f37;
+}
+
+.test-status-error {
+  color: #c0392b;
+}
+
+.bucket-file-row {
+  padding: 2px 0;
+  font-size: 13px;
+  color: #444;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bucket-file-row:hover {
+  background: #f0f0f0;
+}
+
+.bucket-error {
+  padding-left: 16px;
+}
+
+.bucket-empty {
+  font-size: 12px;
+}

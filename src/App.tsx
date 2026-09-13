@@ -3,7 +3,8 @@ import { FileDropZone } from './components/FileDropZone'
 import { SchemaPanel, type TableInfo } from './components/SchemaPanel'
 import { ResultsGrid } from './components/ResultsGrid'
 import { SavedQueriesPanel } from './components/SavedQueriesPanel'
-import { loadFile, runQuery, getSchema, getFileStats, type QueryResult } from './lib/duckdb'
+import { BucketsPanel } from './components/BucketsPanel'
+import { loadFile, loadBuffer, runQuery, getSchema, getFileStats, type QueryResult } from './lib/duckdb'
 import {
   listSavedQueries,
   saveQuery,
@@ -11,6 +12,14 @@ import {
   deleteQuery,
   type SavedQuery,
 } from './lib/savedQueries'
+import {
+  listBucketConnections,
+  addBucketConnection,
+  updateBucketConnection,
+  deleteBucketConnection,
+  type BucketConnection,
+} from './lib/sources'
+import { fetchObject, type S3Entry } from './lib/s3'
 
 function App() {
   const [tables, setTables] = useState<TableInfo[]>([])
@@ -20,6 +29,10 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>(() => listSavedQueries())
+  const [bucketConnections, setBucketConnections] = useState<BucketConnection[]>(() =>
+    listBucketConnections(),
+  )
+  const [loadingBucketFile, setLoadingBucketFile] = useState<string | null>(null)
 
   async function handleFiles(files: File[]) {
     setLoadingFiles(true)
@@ -81,6 +94,43 @@ function App() {
     setSavedQueries(listSavedQueries())
   }
 
+  function handleAddBucket(input: Omit<BucketConnection, 'id'>): BucketConnection {
+    const created = addBucketConnection(input)
+    setBucketConnections(listBucketConnections())
+    return created
+  }
+
+  function handleUpdateBucket(id: string, input: Omit<BucketConnection, 'id'>) {
+    updateBucketConnection(id, input)
+    setBucketConnections(listBucketConnections())
+  }
+
+  function handleDeleteBucket(id: string) {
+    deleteBucketConnection(id)
+    setBucketConnections(listBucketConnections())
+  }
+
+  async function handleOpenBucketFile(conn: BucketConnection, entry: S3Entry) {
+    const key = `${conn.id}::${entry.key}`
+    setLoadingBucketFile(key)
+    setError(null)
+    try {
+      const bytes = await fetchObject(conn, entry.key)
+      const { tableName, originalName } = await loadBuffer(entry.name, bytes)
+      const columns = await getSchema(tableName)
+      const stats = await getFileStats(tableName, entry.size ?? bytes.byteLength)
+      setTables((prev) => [
+        ...prev.filter((t) => t.tableName !== tableName),
+        { tableName, originalName, columns, stats },
+      ])
+      handleSelectTable(tableName)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoadingBucketFile(null)
+    }
+  }
+
   return (
     <div className="app">
       <header>
@@ -96,6 +146,17 @@ function App() {
           <section>
             <h2>Schema</h2>
             <SchemaPanel tables={tables} onSelectTable={handleSelectTable} />
+          </section>
+          <section>
+            <h2>Buckets</h2>
+            <BucketsPanel
+              connections={bucketConnections}
+              onAdd={handleAddBucket}
+              onUpdate={handleUpdateBucket}
+              onDelete={handleDeleteBucket}
+              onOpenFile={handleOpenBucketFile}
+              loadingKey={loadingBucketFile}
+            />
           </section>
           <section>
             <h2>Saved queries</h2>

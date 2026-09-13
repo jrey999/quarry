@@ -62,12 +62,16 @@ export function sanitizeTableName(fileName: string): string {
 }
 
 export async function loadFile(file: File): Promise<LoadedFile> {
-  const db = await getDB()
-  const tableName = sanitizeTableName(file.name)
   const buffer = new Uint8Array(await file.arrayBuffer())
+  return loadBuffer(file.name, buffer)
+}
 
-  const isParquet = /\.parquet$/i.test(file.name)
-  const registeredName = file.name
+export async function loadBuffer(name: string, buffer: Uint8Array): Promise<LoadedFile> {
+  const db = await getDB()
+  const tableName = sanitizeTableName(name)
+
+  const isParquet = /\.parquet$/i.test(name)
+  const registeredName = name
 
   await db.registerFileBuffer(registeredName, buffer)
 
@@ -86,7 +90,7 @@ export async function loadFile(file: File): Promise<LoadedFile> {
     await conn.close()
   }
 
-  return { tableName, originalName: file.name }
+  return { tableName, originalName: name }
 }
 
 export async function runQuery(sql: string): Promise<QueryResult> {
