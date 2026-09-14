@@ -75,6 +75,7 @@ const emptyForm = {
   bucket: '',
   accessKeyId: '',
   secretAccessKey: '',
+  isWriter: false,
 }
 
 function detectProviderForEdit(conn: BucketConnection): typeof emptyForm {
@@ -90,6 +91,7 @@ function detectProviderForEdit(conn: BucketConnection): typeof emptyForm {
         bucket: conn.bucket,
         accessKeyId: conn.accessKeyId,
         secretAccessKey: conn.secretAccessKey,
+        isWriter: conn.isWriter ?? false,
       }
     }
   }
@@ -101,11 +103,23 @@ function detectProviderForEdit(conn: BucketConnection): typeof emptyForm {
     bucket: conn.bucket,
     accessKeyId: conn.accessKeyId,
     secretAccessKey: conn.secretAccessKey,
+    isWriter: conn.isWriter ?? false,
   }
 }
 
 function nodeKey(connectionId: string, prefix: string): string {
   return `${connectionId}::${prefix}`
+}
+
+export interface RegisterControls {
+  key: string | null
+  schema: string
+  table: string
+  start: (conn: BucketConnection, entry: S3Entry) => void
+  setSchema: (v: string) => void
+  setTable: (v: string) => void
+  commit: (conn: BucketConnection, entry: S3Entry) => void
+  cancel: () => void
 }
 
 interface Props {
@@ -114,16 +128,57 @@ interface Props {
   onUpdate: (id: string, input: Omit<BucketConnection, 'id'>) => void
   onDelete: (id: string) => void
   onOpenFile: (conn: BucketConnection, entry: S3Entry) => void
+  onRegister: (conn: BucketConnection, entry: S3Entry, schemaName: string, tableName: string) => void
+  onSetWriter: (id: string | null) => void
   loadingKey: string | null
 }
 
-export function BucketsPanel({ connections, onAdd, onUpdate, onDelete, onOpenFile, loadingKey }: Props) {
+function sanitizeIdentifier(name: string): string {
+  const withoutExt = name.replace(/\.[^/.]+$/, '')
+  return withoutExt.replace(/[^a-zA-Z0-9_]/g, '_')
+}
+
+export function BucketsPanel({
+  connections,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onOpenFile,
+  onRegister,
+  onSetWriter,
+  loadingKey,
+}: Props) {
   const [nodeStates, setNodeStates] = useState<Map<string, NodeState>>(new Map())
   const [collapsedDomains, setCollapsedDomains] = useState<Set<string>>(new Set())
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [testStatus, setTestStatus] = useState<TestStatus>(idleTest)
+  const [registeringKey, setRegisteringKey] = useState<string | null>(null)
+  const [regSchema, setRegSchema] = useState('')
+  const [regTable, setRegTable] = useState('')
+
+  const registerControls: RegisterControls = {
+    key: registeringKey,
+    schema: regSchema,
+    table: regTable,
+    setSchema: setRegSchema,
+    setTable: setRegTable,
+    start: (conn, entry) => {
+      setRegisteringKey(`${conn.id}::${entry.key}`)
+      setRegSchema('')
+      setRegTable(sanitizeIdentifier(entry.name))
+    },
+    commit: (conn, entry) => {
+      const schemaName = regSchema.trim()
+      const tableName = regTable.trim()
+      if (schemaName && tableName) {
+        onRegister(conn, entry, schemaName, tableName)
+      }
+      setRegisteringKey(null)
+    },
+    cancel: () => setRegisteringKey(null),
+  }
 
   function getState(connectionId: string, prefix: string): NodeState {
     return (
@@ -230,11 +285,15 @@ export function BucketsPanel({ connections, onAdd, onUpdate, onDelete, onOpenFil
 
     if (editingId) {
       onUpdate(editingId, input)
+      const wasWriter = connections.find((c) => c.id === editingId)?.isWriter ?? false
+      if (form.isWriter && !wasWriter) onSetWriter(editingId)
+      else if (!form.isWriter && wasWriter) onSetWriter(null)
       if (cachedEntries) {
         setState(editingId, '', { entries: cachedEntries, loading: false, expanded: true })
       }
     } else {
       const created = onAdd(input)
+      if (form.isWriter) onSetWriter(created.id)
       if (cachedEntries) {
         setState(created.id, '', { entries: cachedEntries, loading: false, expanded: true })
       }
@@ -312,6 +371,14 @@ export function BucketsPanel({ connections, onAdd, onUpdate, onDelete, onOpenFil
             value={form.secretAccessKey}
             onChange={(e) => setForm((f) => ({ ...f, secretAccessKey: e.target.value }))}
           />
+          <label className="writer-checkbox">
+            <input
+              type="checkbox"
+              checked={form.isWriter}
+              onChange={(e) => setForm((f) => ({ ...f, isWriter: e.target.checked }))}
+            />
+            Use as metadata store (_quarry/)
+          </label>
           <div className="bucket-form-actions">
             <button onClick={handleTest} disabled={testStatus.state === 'testing'}>
               {testStatus.state === 'testing' ? 'Testing…' : 'Test connection'}
@@ -347,6 +414,7 @@ export function BucketsPanel({ connections, onAdd, onUpdate, onDelete, onOpenFil
                     onDelete={onDelete}
                     onOpenFile={onOpenFile}
                     loadingKey={loadingKey}
+                    registerControls={registerControls}
                   />
                 ))}
               </div>
@@ -368,9 +436,21 @@ interface BucketNodeProps {
   onDelete: (id: string) => void
   onOpenFile: (conn: BucketConnection, entry: S3Entry) => void
   loadingKey: string | null
+  registerControls: RegisterControls
 }
 
-function BucketNode({ conn, prefix, depth, getState, toggle, onEdit, onDelete, onOpenFile, loadingKey }: BucketNodeProps) {
+function BucketNode({
+  conn,
+  prefix,
+  depth,
+  getState,
+  toggle,
+  onEdit,
+  onDelete,
+  onOpenFile,
+  loadingKey,
+  registerControls,
+}: BucketNodeProps) {
   const state = getState(conn.id, prefix)
   const isRoot = prefix === ''
 
@@ -382,6 +462,11 @@ function BucketNode({ conn, prefix, depth, getState, toggle, onEdit, onDelete, o
         </span>
         <span className="bucket-node-name" onClick={() => toggle(conn, prefix)}>
           {isRoot ? `📦 ${conn.bucket}` : basenameOf(prefix)}
+          {isRoot && conn.isWriter && (
+            <span className="writer-badge" title="Metadata store (_quarry/)">
+              ★
+            </span>
+          )}
         </span>
         {isRoot && (
           <>
@@ -397,32 +482,74 @@ function BucketNode({ conn, prefix, depth, getState, toggle, onEdit, onDelete, o
       {state.error && <p className="error bucket-error">{state.error}</p>}
       {state.expanded && state.entries && (
         <div>
-          {state.entries.map((entry) =>
-            entry.isFolder ? (
-              <BucketNode
-                key={entry.key}
-                conn={conn}
-                prefix={entry.key}
-                depth={depth + 1}
-                getState={getState}
-                toggle={toggle}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onOpenFile={onOpenFile}
-                loadingKey={loadingKey}
-              />
-            ) : (
-              <div
-                key={entry.key}
-                className="bucket-file-row"
-                style={{ paddingLeft: (depth + 1) * 14 }}
-                onDoubleClick={() => onOpenFile(conn, entry)}
-                title="Double-click to load into DuckDB"
-              >
-                {loadingKey === `${conn.id}::${entry.key}` ? '…' : '📄'} {entry.name}
+          {state.entries.map((entry) => {
+            if (entry.isFolder) {
+              return (
+                <BucketNode
+                  key={entry.key}
+                  conn={conn}
+                  prefix={entry.key}
+                  depth={depth + 1}
+                  getState={getState}
+                  toggle={toggle}
+                  onEdit={onEdit}
+                  onDelete={onDelete}
+                  onOpenFile={onOpenFile}
+                  loadingKey={loadingKey}
+                  registerControls={registerControls}
+                />
+              )
+            }
+            const fileKey = `${conn.id}::${entry.key}`
+            const isRegistering = registerControls.key === fileKey
+            return (
+              <div key={entry.key} style={{ paddingLeft: (depth + 1) * 14 }}>
+                {isRegistering ? (
+                  <div className="registry-inline-form">
+                    <input
+                      type="text"
+                      placeholder="schema"
+                      value={registerControls.schema}
+                      autoFocus
+                      onChange={(e) => registerControls.setSchema(e.target.value)}
+                    />
+                    <span>.</span>
+                    <input
+                      type="text"
+                      placeholder="table"
+                      value={registerControls.table}
+                      onChange={(e) => registerControls.setTable(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') registerControls.commit(conn, entry)
+                        if (e.key === 'Escape') registerControls.cancel()
+                      }}
+                    />
+                    <button onClick={() => registerControls.commit(conn, entry)}>Save</button>
+                    <button onClick={registerControls.cancel}>Cancel</button>
+                  </div>
+                ) : (
+                  <div
+                    className="bucket-file-row"
+                    onDoubleClick={() => onOpenFile(conn, entry)}
+                    title="Double-click to load into DuckDB"
+                  >
+                    <span className="bucket-file-name">
+                      {loadingKey === fileKey ? '…' : '📄'} {entry.name}
+                    </span>
+                    <button
+                      className="bucket-register"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        registerControls.start(conn, entry)
+                      }}
+                    >
+                      + schema
+                    </button>
+                  </div>
+                )}
               </div>
-            ),
-          )}
+            )
+          })}
           {state.entries.length === 0 && (
             <p className="muted bucket-empty" style={{ paddingLeft: (depth + 1) * 14 }}>
               Empty

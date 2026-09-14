@@ -67,30 +67,48 @@ export async function loadFile(file: File): Promise<LoadedFile> {
 }
 
 export async function loadBuffer(name: string, buffer: Uint8Array): Promise<LoadedFile> {
-  const db = await getDB()
   const tableName = sanitizeTableName(name)
+  await createTableFromBuffer(`"${tableName}"`, name, buffer)
+  return { tableName, originalName: name }
+}
 
-  const isParquet = /\.parquet$/i.test(name)
-  const registeredName = name
+export async function loadBufferAsSchemaTable(
+  schemaName: string,
+  tableName: string,
+  sourceName: string,
+  buffer: Uint8Array,
+): Promise<void> {
+  const db = await getDB()
+  const conn = await db.connect()
+  try {
+    await conn.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`)
+  } finally {
+    await conn.close()
+  }
+  await createTableFromBuffer(`"${schemaName}"."${tableName}"`, sourceName, buffer)
+}
+
+async function createTableFromBuffer(
+  qualifiedTableName: string,
+  sourceName: string,
+  buffer: Uint8Array,
+): Promise<void> {
+  const db = await getDB()
+  const isParquet = /\.parquet$/i.test(sourceName)
+  // duckdb-wasm's registerFileBuffer does not overwrite an existing registration under
+  // the same virtual filename — re-registering "events.parquet" a second time silently
+  // keeps the first buffer. A unique name per call avoids stale data on reload.
+  const registeredName = `${crypto.randomUUID()}-${sourceName}`
 
   await db.registerFileBuffer(registeredName, buffer)
 
   const conn = await db.connect()
   try {
-    if (isParquet) {
-      await conn.query(
-        `CREATE OR REPLACE TABLE "${tableName}" AS SELECT * FROM parquet_scan('${registeredName}')`,
-      )
-    } else {
-      await conn.query(
-        `CREATE OR REPLACE TABLE "${tableName}" AS SELECT * FROM read_csv_auto('${registeredName}')`,
-      )
-    }
+    const source = isParquet ? `parquet_scan('${registeredName}')` : `read_csv_auto('${registeredName}')`
+    await conn.query(`CREATE OR REPLACE TABLE ${qualifiedTableName} AS SELECT * FROM ${source}`)
   } finally {
     await conn.close()
   }
-
-  return { tableName, originalName: name }
 }
 
 export async function runQuery(sql: string): Promise<QueryResult> {

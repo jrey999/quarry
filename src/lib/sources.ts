@@ -5,6 +5,7 @@ export interface BucketConnection {
   region: string
   accessKeyId: string
   secretAccessKey: string
+  isWriter?: boolean
 }
 
 const STORAGE_KEY = 'quarry.bucketConnections'
@@ -39,11 +40,22 @@ export function updateBucketConnection(id: string, input: Omit<BucketConnection,
   const connections = readAll()
   const index = connections.findIndex((c) => c.id === id)
   if (index !== -1) {
-    connections[index] = { id, ...input }
+    // isWriter is managed separately via setWriterBucket; preserve it unless the
+    // caller explicitly included it, so an ordinary field edit can't silently clear it.
+    connections[index] = { id, isWriter: connections[index].isWriter, ...input }
     writeAll(connections)
   }
 }
 
 export function deleteBucketConnection(id: string): void {
   writeAll(readAll().filter((c) => c.id !== id))
+}
+
+export function getWriterBucket(): BucketConnection | undefined {
+  return readAll().find((c) => c.isWriter)
+}
+
+// Only one connection may be the writer bucket at a time; pass null to clear it.
+export function setWriterBucket(id: string | null): void {
+  writeAll(readAll().map((c) => ({ ...c, isWriter: c.id === id })))
 }

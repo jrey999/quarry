@@ -53,6 +53,7 @@ function amzDateParts(date: Date): { amzDate: string; dateStamp: string } {
 // entirely since there is no preflight to reject.
 async function presignedUrl(
   conn: BucketConnection,
+  method: 'GET' | 'PUT',
   path: string,
   extraQuery: Record<string, string>,
   host: string,
@@ -71,7 +72,7 @@ async function presignedUrl(
   }
   const canonicalQueryStr = canonicalQuery(queryParams)
   const canonicalHeaders = `host:${host}\n`
-  const canonicalRequest = ['GET', path, canonicalQueryStr, canonicalHeaders, 'host', 'UNSIGNED-PAYLOAD'].join('\n')
+  const canonicalRequest = [method, path, canonicalQueryStr, canonicalHeaders, 'host', 'UNSIGNED-PAYLOAD'].join('\n')
   const hashedCanonicalRequest = await sha256Hex(canonicalRequest)
   const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, hashedCanonicalRequest].join('\n')
 
@@ -90,19 +91,19 @@ function basename(key: string, isFolder: boolean): string {
   return parts[parts.length - 1] || trimmed
 }
 
-async function fetchOrExplain(url: string): Promise<Response> {
+async function fetchOrExplain(url: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(url)
+    return await fetch(url, init)
   } catch {
     throw new Error(
-      `Network error reaching the bucket. Check that the endpoint host and region are correct, and that the bucket allows access from ${window.location.origin} (its CORS rules should allow GET).`,
+      `Network error reaching the bucket. Check that the endpoint host and region are correct, and that the bucket allows access from ${window.location.origin} (its CORS rules should allow the method you're using).`,
     )
   }
 }
 
 export async function listObjects(conn: BucketConnection, prefix: string): Promise<S3Entry[]> {
   const host = `${conn.bucket}.${conn.endpointHost}`
-  const url = await presignedUrl(conn, '/', { 'list-type': '2', delimiter: '/', prefix }, host)
+  const url = await presignedUrl(conn, 'GET', '/', { 'list-type': '2', delimiter: '/', prefix }, host)
 
   const res = await fetchOrExplain(url)
   if (!res.ok) {
@@ -140,7 +141,7 @@ export async function listObjects(conn: BucketConnection, prefix: string): Promi
 export async function fetchObject(conn: BucketConnection, key: string): Promise<Uint8Array> {
   const host = `${conn.bucket}.${conn.endpointHost}`
   const path = '/' + canonicalUri(key)
-  const url = await presignedUrl(conn, path, {}, host)
+  const url = await presignedUrl(conn, 'GET', path, {}, host)
 
   const res = await fetchOrExplain(url)
   if (!res.ok) {
@@ -148,4 +149,19 @@ export async function fetchObject(conn: BucketConnection, key: string): Promise<
     throw new Error(`S3 fetch failed (${res.status}): ${text.slice(0, 300)}`)
   }
   return new Uint8Array(await res.arrayBuffer())
+}
+
+export async function putObject(conn: BucketConnection, key: string, body: Uint8Array): Promise<void> {
+  const host = `${conn.bucket}.${conn.endpointHost}`
+  const path = '/' + canonicalUri(key)
+  const url = await presignedUrl(conn, 'PUT', path, {}, host)
+
+  // No custom headers here — a Content-Type other than a CORS-safelisted value would
+  // turn this into a non-simple request and bring back the preflight problem presigning
+  // is meant to avoid. A type-less Blob sends no Content-Type header.
+  const res = await fetchOrExplain(url, { method: 'PUT', body: new Blob([body as BlobPart]) })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`S3 put failed (${res.status}): ${text.slice(0, 300)}`)
+  }
 }
