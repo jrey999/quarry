@@ -374,7 +374,7 @@ function App() {
               placeholder="SELECT * FROM my_table LIMIT 100"
               spellCheck={false}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || e.shiftKey)) {
                   e.preventDefault()
                   handleRun()
                 }
@@ -382,7 +382,7 @@ function App() {
             />
             <div className="editor-actions">
               <button onClick={() => handleRun()} disabled={running}>
-                {running ? 'Running...' : 'Run query (Enter · Shift+Enter for newline)'}
+                {running ? 'Running...' : 'Run query (Cmd/Ctrl+Enter or Shift+Enter · Enter for newline)'}
               </button>
               {error && <span className="error">{error}</span>}
             </div>
