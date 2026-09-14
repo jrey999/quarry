@@ -5,7 +5,14 @@ import { ResultsGrid } from './components/ResultsGrid'
 import { SavedQueriesPanel } from './components/SavedQueriesPanel'
 import { BucketsPanel } from './components/BucketsPanel'
 import { SchemaRegistryPanel } from './components/SchemaRegistryPanel'
-import { loadFile, loadBuffer, loadBufferAsSchemaTable, runQuery, type QueryResult } from './lib/duckdb'
+import {
+  loadFile,
+  loadBuffer,
+  loadBufferAsSchemaTable,
+  createOrReplaceView,
+  runQuery,
+  type QueryResult,
+} from './lib/duckdb'
 import {
   listSavedQueries,
   saveQuery,
@@ -19,6 +26,7 @@ import {
   updateBucketConnection,
   deleteBucketConnection,
   setWriterBucket,
+  getWriterBucket,
   type BucketConnection,
 } from './lib/sources'
 import {
@@ -28,7 +36,8 @@ import {
   unregisterTable,
   type RegisteredTable,
 } from './lib/registry'
-import { fetchObject, type S3Entry } from './lib/s3'
+import { listSavedViews, createView, updateView, deleteView, viewObjectKey, type SavedView } from './lib/views'
+import { fetchObject, putObject, type S3Entry } from './lib/s3'
 
 interface CurrentFile {
   label: string
@@ -51,6 +60,7 @@ function App() {
   const [registeredTables, setRegisteredTables] = useState<RegisteredTable[]>(() => listRegisteredTables())
   const [loadingRegisteredId, setLoadingRegisteredId] = useState<string | null>(null)
   const [loadedQualifiedNames, setLoadedQualifiedNames] = useState<Set<string>>(new Set())
+  const [savedViews, setSavedViews] = useState<SavedView[]>(() => listSavedViews())
 
   async function handleFiles(newFiles: File[]) {
     setLoadingFiles(true)
@@ -77,23 +87,37 @@ function App() {
     setLoadedQualifiedNames((prev) => new Set(prev).add(qualifiedName))
   }
 
-  // Lets a raw query reference "schema"."table" (or schema.table) for any registered
-  // table without having to click it in the Schema panel first — the underlying file
-  // is fetched and loaded on demand, the same way clicking it would.
-  async function ensureRegisteredTablesLoaded(query: string): Promise<void> {
-    if (registeredTables.length === 0) return
+  function extractQualifiedRefs(query: string): string[] {
     const pattern =
       /"([A-Za-z_][A-Za-z0-9_]*)"\s*\.\s*"([A-Za-z_][A-Za-z0-9_]*)"|\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b/g
     const refs = new Set<string>()
     let m: RegExpExecArray | null
     while ((m = pattern.exec(query)) !== null) {
-      const schemaName = m[1] ?? m[3]
-      const tableName = m[2] ?? m[4]
-      refs.add(`${schemaName}.${tableName}`)
+      refs.add(`${m[1] ?? m[3]}.${m[2] ?? m[4]}`)
     }
-    for (const table of registeredTables) {
-      if (refs.has(`${table.schemaName}.${table.tableName}`)) {
+    return [...refs]
+  }
+
+  // Lets a raw query reference "schema"."table" or "schema"."view" without having to
+  // click it in the Schema panel first — the underlying file (or, for a view, whatever
+  // it in turn references) is loaded on demand, recursively, the same way clicking it would.
+  async function ensureQualifiedRefsLoaded(query: string, processing: Set<string> = new Set()): Promise<void> {
+    if (registeredTables.length === 0 && savedViews.length === 0) return
+    for (const ref of extractQualifiedRefs(query)) {
+      if (loadedQualifiedNames.has(ref) || processing.has(ref)) continue
+      processing.add(ref)
+
+      const table = registeredTables.find((t) => `${t.schemaName}.${t.tableName}` === ref)
+      if (table) {
         await loadRegisteredTable(table)
+        continue
+      }
+
+      const view = savedViews.find((v) => `${v.schemaName}.${v.viewName}` === ref)
+      if (view) {
+        await ensureQualifiedRefsLoaded(view.sql, processing)
+        await createOrReplaceView(view.schemaName, view.viewName, view.sql)
+        setLoadedQualifiedNames((prev) => new Set(prev).add(ref))
       }
     }
   }
@@ -105,7 +129,7 @@ function App() {
     setRunning(true)
     setError(null)
     try {
-      await ensureRegisteredTablesLoaded(queryToRun)
+      await ensureQualifiedRefsLoaded(queryToRun)
       const res = await runQuery(queryToRun)
       setResult(res)
     } catch (err) {
@@ -209,6 +233,68 @@ function App() {
     }
   }
 
+  async function syncViewToWriterBucket(schemaName: string, viewName: string, viewSql: string) {
+    const writer = getWriterBucket()
+    if (!writer) return
+    try {
+      await putObject(writer, viewObjectKey(schemaName, viewName), new TextEncoder().encode(viewSql))
+    } catch (err) {
+      setError(
+        `View saved locally, but syncing to ${writer.bucket} failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  async function handleCreateView(schemaName: string, viewName: string) {
+    setError(null)
+    try {
+      const viewSql = sql
+      await ensureQualifiedRefsLoaded(viewSql)
+      await createOrReplaceView(schemaName, viewName, viewSql)
+      createView({ schemaName, viewName, sql: viewSql })
+      setSavedViews(listSavedViews())
+      setLoadedQualifiedNames((prev) => new Set(prev).add(`${schemaName}.${viewName}`))
+      const previewQuery = `SELECT * FROM "${schemaName}"."${viewName}"`
+      setSql(previewQuery)
+      setCurrentFile({ label: `${schemaName}.${viewName}`, source: 'registry' })
+      await handleRun(previewQuery, true)
+      await syncViewToWriterBucket(schemaName, viewName, viewSql)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function handleUpdateView(id: string, schemaName: string, viewName: string, viewSql: string) {
+    setError(null)
+    try {
+      await ensureQualifiedRefsLoaded(viewSql)
+      await createOrReplaceView(schemaName, viewName, viewSql)
+      updateView(id, { schemaName, viewName, sql: viewSql })
+      setSavedViews(listSavedViews())
+      setLoadedQualifiedNames((prev) => new Set(prev).add(`${schemaName}.${viewName}`))
+      await syncViewToWriterBucket(schemaName, viewName, viewSql)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  function handleDeleteView(id: string) {
+    deleteView(id)
+    setSavedViews(listSavedViews())
+  }
+
+  async function handleOpenView(view: SavedView) {
+    setError(null)
+    try {
+      const query = `SELECT * FROM "${view.schemaName}"."${view.viewName}"`
+      setSql(query)
+      setCurrentFile({ label: `${view.schemaName}.${view.viewName}`, source: 'registry' })
+      await handleRun(query, true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return (
     <div className="app">
       <header>
@@ -242,10 +328,15 @@ function App() {
             <h2>Schema</h2>
             <SchemaRegistryPanel
               tables={registeredTables}
+              views={savedViews}
               connections={bucketConnections}
-              onUpdate={handleUpdateRegisteredTable}
-              onDelete={handleDeleteRegisteredTable}
+              onUpdateTable={handleUpdateRegisteredTable}
+              onDeleteTable={handleDeleteRegisteredTable}
               onOpenTable={handleOpenRegisteredTable}
+              onCreateView={handleCreateView}
+              onUpdateView={handleUpdateView}
+              onDeleteView={handleDeleteView}
+              onOpenView={handleOpenView}
               loadingId={loadingRegisteredId}
             />
           </section>

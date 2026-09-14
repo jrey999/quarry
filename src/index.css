@@ -287,7 +287,8 @@ th {
   font-size: 12px;
 }
 
-.add-bucket-toggle {
+.add-bucket-toggle,
+.create-view-toggle {
   margin-bottom: 8px;
   font-size: 13px;
 }

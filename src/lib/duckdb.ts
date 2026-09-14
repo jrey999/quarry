@@ -88,6 +88,17 @@ export async function loadBufferAsSchemaTable(
   await createTableFromBuffer(`"${schemaName}"."${tableName}"`, sourceName, buffer)
 }
 
+export async function createOrReplaceView(schemaName: string, viewName: string, sql: string): Promise<void> {
+  const db = await getDB()
+  const conn = await db.connect()
+  try {
+    await conn.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`)
+    await conn.query(`CREATE OR REPLACE VIEW "${schemaName}"."${viewName}" AS ${sql}`)
+  } finally {
+    await conn.close()
+  }
+}
+
 async function createTableFromBuffer(
   qualifiedTableName: string,
   sourceName: string,
