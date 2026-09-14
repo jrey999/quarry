@@ -87,13 +87,19 @@ header h1 {
 
 .sql-editor {
   width: 100%;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.sql-editor .cm-editor {
   height: 140px;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 14px;
-  padding: 10px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  resize: vertical;
+}
+
+.sql-editor .cm-scroller {
+  overflow: auto;
 }
 
 .editor-actions {

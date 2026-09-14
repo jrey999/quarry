@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import type { SQLNamespace } from '@codemirror/lang-sql'
 import { FileDropZone } from './components/FileDropZone'
 import { FilesPanel, type LoadedFileEntry } from './components/FilesPanel'
 import { ResultsGrid } from './components/ResultsGrid'
 import { SavedQueriesPanel } from './components/SavedQueriesPanel'
 import { BucketsPanel } from './components/BucketsPanel'
 import { SchemaRegistryPanel } from './components/SchemaRegistryPanel'
+import { SqlEditor } from './components/SqlEditor'
 import {
   loadFile,
   loadBuffer,
@@ -61,6 +63,23 @@ function App() {
   const [loadingRegisteredId, setLoadingRegisteredId] = useState<string | null>(null)
   const [loadedQualifiedNames, setLoadedQualifiedNames] = useState<Set<string>>(new Set())
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => listSavedViews())
+
+  const sqlSchema: SQLNamespace = useMemo(() => {
+    const flatTables: Record<string, string[]> = {}
+    for (const f of files) flatTables[f.tableName] = []
+
+    const schemas: Record<string, Record<string, string[]>> = {}
+    for (const t of registeredTables) {
+      schemas[t.schemaName] = schemas[t.schemaName] ?? {}
+      schemas[t.schemaName][t.tableName] = []
+    }
+    for (const v of savedViews) {
+      schemas[v.schemaName] = schemas[v.schemaName] ?? {}
+      schemas[v.schemaName][v.viewName] = []
+    }
+
+    return { ...flatTables, ...schemas }
+  }, [files, registeredTables, savedViews])
 
   async function handleFiles(newFiles: File[]) {
     setLoadingFiles(true)
@@ -367,19 +386,7 @@ function App() {
 
           <section className="editor-section">
             <h2>Query</h2>
-            <textarea
-              className="sql-editor"
-              value={sql}
-              onChange={(e) => setSql(e.target.value)}
-              placeholder="SELECT * FROM my_table LIMIT 100"
-              spellCheck={false}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || e.shiftKey)) {
-                  e.preventDefault()
-                  handleRun()
-                }
-              }}
-            />
+            <SqlEditor value={sql} onChange={setSql} onRun={() => handleRun()} schema={sqlSchema} />
             <div className="editor-actions">
               <button onClick={() => handleRun()} disabled={running}>
                 {running ? 'Running...' : 'Run query (Cmd/Ctrl+Enter or Shift+Enter · Enter for newline)'}
