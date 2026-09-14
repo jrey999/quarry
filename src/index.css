@@ -69,6 +69,17 @@ header h1 {
   margin: 0 0 8px;
 }
 
+.now-viewing-section {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
+.now-viewing {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .editor-section {
   flex-shrink: 0;
 }
@@ -176,22 +187,22 @@ th {
   background: #f0f0f0;
 }
 
-.schema-table {
-  margin-bottom: 16px;
+.files-panel {
+  margin-top: 8px;
 }
 
-.schema-table h3 {
-  margin: 0 0 2px;
-  font-size: 14px;
-  font-family: ui-monospace, Consolas, monospace;
+.loaded-file-row {
+  padding: 2px 0;
+  font-size: 13px;
+  color: #444;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.schema-table-name {
-  cursor: pointer;
-}
-
-.schema-table-name:hover {
-  text-decoration: underline;
+.loaded-file-row:hover {
+  background: #f0f0f0;
 }
 
 .results-grid {

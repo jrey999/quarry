@@ -140,7 +140,8 @@ export function BucketsPanel({ connections, onAdd, onUpdate, onDelete, onOpenFil
     setNodeStates((prev) => {
       const next = new Map(prev)
       const key = nodeKey(connectionId, prefix)
-      next.set(key, { ...getState(connectionId, prefix), ...patch })
+      const current = prev.get(key) ?? { entries: null, loading: false, error: null, expanded: false }
+      next.set(key, { ...current, ...patch })
       return next
     })
   }

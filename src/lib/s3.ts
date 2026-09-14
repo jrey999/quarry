@@ -115,10 +115,16 @@ export async function listObjects(conn: BucketConnection, prefix: string): Promi
   const parserError = doc.getElementsByTagName('parsererror')[0]
   if (parserError) throw new Error('Failed to parse S3 response')
 
-  const folders: S3Entry[] = Array.from(doc.getElementsByTagName('CommonPrefixes')).map((node) => {
-    const p = node.getElementsByTagName('Prefix')[0]?.textContent ?? ''
-    return { key: p, name: basename(p, true), isFolder: true }
-  })
+  const folders: S3Entry[] = Array.from(doc.getElementsByTagName('CommonPrefixes'))
+    .map((node) => {
+      const p = node.getElementsByTagName('Prefix')[0]?.textContent ?? ''
+      return { key: p, name: basename(p, true), isFolder: true }
+    })
+    // Some S3-compatible providers (DigitalOcean Spaces included) echo a folder's own
+    // zero-byte marker object back as a CommonPrefix equal to the queried prefix itself.
+    // Left in, that renders a folder as its own child under an identical state key,
+    // causing runaway recursive rendering.
+    .filter((f) => f.key !== prefix)
 
   const files: S3Entry[] = Array.from(doc.getElementsByTagName('Contents'))
     .map((node) => {

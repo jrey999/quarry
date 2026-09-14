@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { FileDropZone } from './components/FileDropZone'
-import { SchemaPanel, type TableInfo } from './components/SchemaPanel'
+import { FilesPanel, type LoadedFileEntry } from './components/FilesPanel'
 import { ResultsGrid } from './components/ResultsGrid'
 import { SavedQueriesPanel } from './components/SavedQueriesPanel'
 import { BucketsPanel } from './components/BucketsPanel'
-import { loadFile, loadBuffer, runQuery, getSchema, getFileStats, type QueryResult } from './lib/duckdb'
+import { loadFile, loadBuffer, runQuery, type QueryResult } from './lib/duckdb'
 import {
   listSavedQueries,
   saveQuery,
@@ -21,8 +21,14 @@ import {
 } from './lib/sources'
 import { fetchObject, type S3Entry } from './lib/s3'
 
+interface CurrentFile {
+  label: string
+  source: 'local' | 'bucket'
+}
+
 function App() {
-  const [tables, setTables] = useState<TableInfo[]>([])
+  const [files, setFiles] = useState<LoadedFileEntry[]>([])
+  const [currentFile, setCurrentFile] = useState<CurrentFile | null>(null)
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [sql, setSql] = useState('')
   const [result, setResult] = useState<QueryResult | null>(null)
@@ -34,18 +40,13 @@ function App() {
   )
   const [loadingBucketFile, setLoadingBucketFile] = useState<string | null>(null)
 
-  async function handleFiles(files: File[]) {
+  async function handleFiles(newFiles: File[]) {
     setLoadingFiles(true)
     setError(null)
     try {
-      for (const file of files) {
+      for (const file of newFiles) {
         const { tableName, originalName } = await loadFile(file)
-        const columns = await getSchema(tableName)
-        const stats = await getFileStats(tableName, file.size)
-        setTables((prev) => [
-          ...prev.filter((t) => t.tableName !== tableName),
-          { tableName, originalName, columns, stats },
-        ])
+        setFiles((prev) => [...prev.filter((f) => f.tableName !== tableName), { tableName, originalName }])
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -54,9 +55,10 @@ function App() {
     }
   }
 
-  async function handleRun(queryOverride?: string) {
+  async function handleRun(queryOverride?: string, keepCurrentFile = false) {
     const queryToRun = queryOverride ?? sql
     if (!queryToRun.trim()) return
+    if (!keepCurrentFile) setCurrentFile(null)
     setRunning(true)
     setError(null)
     try {
@@ -69,10 +71,11 @@ function App() {
     }
   }
 
-  function handleSelectTable(tableName: string) {
+  function handleSelectTable(tableName: string, label: string, source: CurrentFile['source']) {
     const query = `SELECT * FROM "${tableName}"`
     setSql(query)
-    handleRun(query)
+    setCurrentFile({ label, source })
+    handleRun(query, true)
   }
 
   function handleSaveQuery(name: string) {
@@ -82,6 +85,7 @@ function App() {
 
   function handleLoadQuery(query: SavedQuery) {
     setSql(query.sql)
+    setCurrentFile(null)
   }
 
   function handleRenameQuery(id: string, name: string) {
@@ -116,14 +120,8 @@ function App() {
     setError(null)
     try {
       const bytes = await fetchObject(conn, entry.key)
-      const { tableName, originalName } = await loadBuffer(entry.name, bytes)
-      const columns = await getSchema(tableName)
-      const stats = await getFileStats(tableName, entry.size ?? bytes.byteLength)
-      setTables((prev) => [
-        ...prev.filter((t) => t.tableName !== tableName),
-        { tableName, originalName, columns, stats },
-      ])
-      handleSelectTable(tableName)
+      const { tableName } = await loadBuffer(entry.name, bytes)
+      handleSelectTable(tableName, entry.name, 'bucket')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -142,10 +140,10 @@ function App() {
           <section>
             <h2>Files</h2>
             <FileDropZone onFiles={handleFiles} loading={loadingFiles} />
-          </section>
-          <section>
-            <h2>Schema</h2>
-            <SchemaPanel tables={tables} onSelectTable={handleSelectTable} />
+            <FilesPanel
+              files={files}
+              onOpenFile={(file) => handleSelectTable(file.tableName, file.originalName, 'local')}
+            />
           </section>
           <section>
             <h2>Buckets</h2>
@@ -171,6 +169,17 @@ function App() {
         </aside>
 
         <main className="main">
+          <section className="now-viewing-section">
+            <h2>Now viewing</h2>
+            {currentFile ? (
+              <p className="now-viewing">
+                {currentFile.source === 'bucket' ? '📦' : '📄'} {currentFile.label}
+              </p>
+            ) : (
+              <p className="muted">No file selected.</p>
+            )}
+          </section>
+
           <section className="editor-section">
             <h2>Query</h2>
             <textarea
