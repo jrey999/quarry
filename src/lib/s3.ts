@@ -91,6 +91,14 @@ function basename(key: string, isFolder: boolean): string {
   return parts[parts.length - 1] || trimmed
 }
 
+// _quarry/ holds the app's own bookkeeping (view definitions, future metadata) —
+// never user data, so it should never show up as something to browse or open.
+function isQuarryPath(key: string): boolean {
+  return key === '_quarry/' || key.startsWith('_quarry/')
+}
+
+const USABLE_FILE_EXTENSIONS = /\.(csv|parquet)$/i
+
 async function fetchOrExplain(url: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init)
@@ -126,6 +134,7 @@ export async function listObjects(conn: BucketConnection, prefix: string): Promi
     // Left in, that renders a folder as its own child under an identical state key,
     // causing runaway recursive rendering.
     .filter((f) => f.key !== prefix)
+    .filter((f) => !isQuarryPath(f.key))
 
   const files: S3Entry[] = Array.from(doc.getElementsByTagName('Contents'))
     .map((node) => {
@@ -134,6 +143,8 @@ export async function listObjects(conn: BucketConnection, prefix: string): Promi
       return { key, name: basename(key, false), isFolder: false, size: sizeText ? Number(sizeText) : undefined }
     })
     .filter((f) => f.key !== prefix)
+    .filter((f) => !isQuarryPath(f.key))
+    .filter((f) => USABLE_FILE_EXTENSIONS.test(f.name))
 
   return [...folders, ...files]
 }
