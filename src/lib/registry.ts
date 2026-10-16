@@ -4,6 +4,8 @@ export interface RegisteredTable {
   tableName: string
   connectionId: string
   key: string
+  // The source file that added this table; absent for tables registered by hand.
+  manifestId?: string
 }
 
 const STORAGE_KEY = 'quarry.registeredTables'
@@ -38,11 +40,15 @@ export function updateRegisteredTable(id: string, input: Omit<RegisteredTable, '
   const tables = readAll()
   const index = tables.findIndex((t) => t.id === id)
   if (index !== -1) {
-    tables[index] = { id, ...input }
+    tables[index] = { ...tables[index], ...input, id }
     writeAll(tables)
   }
 }
 
 export function unregisterTable(id: string): void {
   writeAll(readAll().filter((t) => t.id !== id))
+}
+
+export function unregisterTablesByManifest(manifestId: string): void {
+  writeAll(readAll().filter((t) => t.manifestId !== manifestId))
 }

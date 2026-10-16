@@ -99,6 +99,10 @@ function isQuarryPath(key: string): boolean {
 
 const USABLE_FILE_EXTENSIONS = /\.(csv|parquet)$/i
 
+export function isDataFileKey(key: string): boolean {
+  return !isQuarryPath(key) && USABLE_FILE_EXTENSIONS.test(key)
+}
+
 async function fetchOrExplain(url: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init)
@@ -149,6 +153,39 @@ export async function listObjects(conn: BucketConnection, prefix: string): Promi
   return [...folders, ...files]
 }
 
+// Every usable data file key under `prefix`, however deeply nested. Unlike listObjects
+// this sends no delimiter, so S3 returns the whole subtree and we page through it.
+export async function listAllDataKeys(conn: BucketConnection, prefix: string): Promise<string[]> {
+  const host = `${conn.bucket}.${conn.endpointHost}`
+  const keys: string[] = []
+  let continuationToken: string | undefined
+
+  do {
+    const query: Record<string, string> = { 'list-type': '2', prefix }
+    if (continuationToken) query['continuation-token'] = continuationToken
+    const url = await presignedUrl(conn, 'GET', '/', query, host)
+
+    const res = await fetchOrExplain(url)
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`S3 list failed (${res.status}): ${text.slice(0, 300)}`)
+    }
+
+    const doc = new DOMParser().parseFromString(await res.text(), 'application/xml')
+    if (doc.getElementsByTagName('parsererror')[0]) throw new Error('Failed to parse S3 response')
+
+    for (const node of Array.from(doc.getElementsByTagName('Contents'))) {
+      const key = node.getElementsByTagName('Key')[0]?.textContent ?? ''
+      if (isDataFileKey(key)) keys.push(key)
+    }
+
+    const truncated = doc.getElementsByTagName('IsTruncated')[0]?.textContent === 'true'
+    continuationToken = truncated ? doc.getElementsByTagName('NextContinuationToken')[0]?.textContent ?? undefined : undefined
+  } while (continuationToken)
+
+  return keys
+}
+
 export async function fetchObject(conn: BucketConnection, key: string): Promise<Uint8Array> {
   const host = `${conn.bucket}.${conn.endpointHost}`
   const path = '/' + canonicalUri(key)
@@ -157,7 +194,7 @@ export async function fetchObject(conn: BucketConnection, key: string): Promise<
   const res = await fetchOrExplain(url)
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(`S3 fetch failed (${res.status}): ${text.slice(0, 300)}`)
+    throw new Error(`S3 fetch failed for "${key}" (${res.status}): ${text.slice(0, 300)}`)
   }
   return new Uint8Array(await res.arrayBuffer())
 }
