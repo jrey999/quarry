@@ -9,6 +9,8 @@ type AddMode = 'paste' | 'reference' | 'generate'
 
 interface Props {
   manifests: SourceManifest[]
+  activeId: string | null
+  onSetActive: (id: string | null) => void
   connections: BucketConnection[]
   onAddInline: (label: string, content: string) => Promise<ManifestApplyOutcome>
   onAddReference: (label: string, connectionId: string, key: string) => Promise<ManifestApplyOutcome>
@@ -25,7 +27,16 @@ function describeOutcome(outcome: ManifestApplyOutcome): string {
   return parts.length > 0 ? parts.join(', ') : 'Nothing to apply'
 }
 
-export function SourceManifestsPanel({ manifests, connections, onAddInline, onAddReference, onRefresh, onDelete }: Props) {
+export function SourceManifestsPanel({
+  manifests,
+  activeId,
+  onSetActive,
+  connections,
+  onAddInline,
+  onAddReference,
+  onRefresh,
+  onDelete,
+}: Props) {
   const [showForm, setShowForm] = useState(false)
   const [mode, setMode] = useState<AddMode>('paste')
   const [label, setLabel] = useState('')
@@ -188,9 +199,15 @@ export function SourceManifestsPanel({ manifests, connections, onAddInline, onAd
         const status = statusById.get(m.id) ?? statusById.get(m.label)
         return (
           <div key={m.id} className="manifest-row">
-            <span className="manifest-label">
+            <label className="manifest-label">
+              <input
+                type="checkbox"
+                checked={m.id === activeId}
+                onChange={() => onSetActive(m.id === activeId ? null : m.id)}
+                title="Only the active source file's tables and views are shown"
+              />
               📄 {m.label} <span className="manifest-kind">({m.kind})</span>
-            </span>
+            </label>
             <span className="manifest-actions">
               {m.kind === 'reference' && (
                 <button onClick={() => handleRefreshClick(m)} disabled={busyId === m.id}>

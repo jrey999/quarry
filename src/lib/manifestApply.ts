@@ -91,12 +91,21 @@ export function resolveManifest(parsed: ParsedManifest, connections: BucketConne
 // id, rather than appended again. Nothing is ever deleted here: an entry dropped
 // from the manifest is left as-is, since silently removing a registration someone
 // else may have added manually (or under the same schema) is a real footgun.
-export function applyManifest(text: string, connections: BucketConnection[]): ManifestApplyOutcome {
+//
+// `manifestId` stamps every entry with the source file that owns it. A match is an
+// entry that file already owns, or an unowned one (registered by hand, or applied
+// before ownership existed), which it then claims. An entry owned by a different
+// source file is never touched — both files keep their own copy.
+export function applyManifest(text: string, connections: BucketConnection[], manifestId?: string): ManifestApplyOutcome {
   const parsed = parseManifest(text)
   const { tables, views, errors } = resolveManifest(parsed, connections)
 
   const existingTables = listRegisteredTables()
   const existingViews = listSavedViews()
+
+  const ownedBy = manifestId ? { manifestId } : {}
+  const matchesOwner = (existingOwner: string | undefined) =>
+    existingOwner === undefined || existingOwner === manifestId
 
   let tablesCreated = 0
   let tablesUpdated = 0
@@ -104,28 +113,29 @@ export function applyManifest(text: string, connections: BucketConnection[]): Ma
   let viewsUpdated = 0
 
   for (const t of tables) {
-    const existing = existingTables.find((e) => e.schemaName === t.schemaName && e.tableName === t.tableName)
+    const existing = existingTables.find(
+      (e) => e.schemaName === t.schemaName && e.tableName === t.tableName && matchesOwner(e.manifestId),
+    )
+    const entry = { schemaName: t.schemaName, tableName: t.tableName, connectionId: t.connectionId, key: t.key, ...ownedBy }
     if (existing) {
-      updateRegisteredTable(existing.id, {
-        schemaName: t.schemaName,
-        tableName: t.tableName,
-        connectionId: t.connectionId,
-        key: t.key,
-      })
+      updateRegisteredTable(existing.id, entry)
       tablesUpdated++
     } else {
-      registerTable({ schemaName: t.schemaName, tableName: t.tableName, connectionId: t.connectionId, key: t.key })
+      registerTable(entry)
       tablesCreated++
     }
   }
 
   for (const v of views) {
-    const existing = existingViews.find((e) => e.schemaName === v.schemaName && e.viewName === v.viewName)
+    const existing = existingViews.find(
+      (e) => e.schemaName === v.schemaName && e.viewName === v.viewName && matchesOwner(e.manifestId),
+    )
+    const entry = { schemaName: v.schemaName, viewName: v.viewName, sql: v.sql, ...ownedBy }
     if (existing) {
-      updateView(existing.id, { schemaName: v.schemaName, viewName: v.viewName, sql: v.sql })
+      updateView(existing.id, entry)
       viewsUpdated++
     } else {
-      createView({ schemaName: v.schemaName, viewName: v.viewName, sql: v.sql })
+      createView(entry)
       viewsCreated++
     }
   }
@@ -146,5 +156,5 @@ export async function refreshReferenceManifest(
   if (!conn) throw new Error(`Bucket connection for source manifest "${manifest.label}" no longer exists.`)
   const bytes = await fetchObject(conn, manifest.key)
   const text = new TextDecoder().decode(bytes)
-  return applyManifest(text, connections)
+  return applyManifest(text, connections, manifest.id)
 }

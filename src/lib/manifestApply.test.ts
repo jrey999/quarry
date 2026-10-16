@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyManifest, refreshReferenceManifest, resolveManifest } from './manifestApply'
 import { parseManifest } from './manifestParsing'
-import { listRegisteredTables } from './registry'
+import { listRegisteredTables, registerTable, updateRegisteredTable } from './registry'
 import { listSavedViews } from './views'
 import type { BucketConnection } from './sources'
 import type { SourceManifest } from './sourceManifests'
@@ -171,6 +171,75 @@ schemas:
   })
 })
 
+describe('applyManifest ownership', () => {
+  const otherYaml = basicYaml.replace('espn/players.parquet', 'other/players.parquet')
+
+  it('stamps the owning source file on tables and views it adds', () => {
+    applyManifest(basicYaml, [makeConnection()], 'm1')
+    expect(listRegisteredTables()[0].manifestId).toBe('m1')
+    expect(listSavedViews()[0].manifestId).toBe('m1')
+  })
+
+  it('keeps separate copies when two source files declare the same schema and table', () => {
+    applyManifest(basicYaml, [makeConnection()], 'm1')
+    applyManifest(otherYaml, [makeConnection()], 'm2')
+
+    const tables = listRegisteredTables()
+    expect(tables.map((t) => [t.manifestId, t.key])).toEqual([
+      ['m1', 'espn/players.parquet'],
+      ['m2', 'other/players.parquet'],
+    ])
+    expect(listSavedViews().map((v) => v.manifestId)).toEqual(['m1', 'm2'])
+  })
+
+  it('updates its own entries in place when re-applied', () => {
+    applyManifest(basicYaml, [makeConnection()], 'm1')
+    const id = listRegisteredTables()[0].id
+    applyManifest(basicYaml, [makeConnection()], 'm1')
+    expect(listRegisteredTables()).toHaveLength(1)
+    expect(listRegisteredTables()[0].id).toBe(id)
+  })
+
+  it('claims an unowned entry (applied before ownership existed) instead of duplicating it', () => {
+    applyManifest(basicYaml, [makeConnection()])
+    expect(listRegisteredTables()[0].manifestId).toBeUndefined()
+
+    applyManifest(basicYaml, [makeConnection()], 'm1')
+
+    expect(listRegisteredTables()).toHaveLength(1)
+    expect(listRegisteredTables()[0].manifestId).toBe('m1')
+    expect(listSavedViews()).toHaveLength(1)
+    expect(listSavedViews()[0].manifestId).toBe('m1')
+  })
+
+  it('never touches an entry owned by a different source file when applied without an owner', () => {
+    applyManifest(basicYaml, [makeConnection()], 'm1')
+    applyManifest(otherYaml, [makeConnection()])
+
+    expect(listRegisteredTables()).toHaveLength(2)
+    expect(listRegisteredTables()[0].key).toBe('espn/players.parquet')
+  })
+
+  it('keeps ownership when an owned table is edited without naming an owner', () => {
+    applyManifest(basicYaml, [makeConnection()], 'm1')
+    const table = listRegisteredTables()[0]
+
+    updateRegisteredTable(table.id, {
+      schemaName: table.schemaName,
+      tableName: 'renamed',
+      connectionId: table.connectionId,
+      key: table.key,
+    })
+
+    expect(listRegisteredTables()[0]).toMatchObject({ tableName: 'renamed', manifestId: 'm1' })
+  })
+
+  it('leaves hand-registered tables without an owner', () => {
+    registerTable({ schemaName: 'x', tableName: 'y', connectionId: 'conn-1', key: 'y.parquet' })
+    expect(listRegisteredTables()[0].manifestId).toBeUndefined()
+  })
+})
+
 describe('refreshReferenceManifest', () => {
   const referenceManifest: SourceManifest = {
     id: 'manifest-1',
@@ -189,6 +258,7 @@ describe('refreshReferenceManifest', () => {
     expect(fetchObject).toHaveBeenCalledWith(makeConnection(), 'sources.yml')
     expect(outcome.tablesCreated).toBe(1)
     expect(listRegisteredTables()).toHaveLength(1)
+    expect(listRegisteredTables()[0].manifestId).toBe('manifest-1')
   })
 
   it('throws if the referenced bucket connection no longer exists', async () => {

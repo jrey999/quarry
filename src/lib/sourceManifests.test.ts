@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   addSourceManifest,
   deleteSourceManifest,
+  getActiveSourceManifestId,
+  isVisibleForActive,
   listSourceManifests,
+  setActiveSourceManifestId,
   sourceManifestObjectKey,
   updateSourceManifestContent,
 } from './sourceManifests'
@@ -42,6 +45,47 @@ describe('sourceManifests', () => {
     deleteSourceManifest(a.id)
 
     expect(listSourceManifests()).toEqual([b])
+  })
+
+  it('keeps a supplied id when adding', () => {
+    const created = addSourceManifest({ id: 'fixed', label: 'a', kind: 'inline', content: '' })
+    expect(created.id).toBe('fixed')
+  })
+
+  describe('active source file', () => {
+    it('defaults to the newest manifest, and to none when there are none', () => {
+      expect(getActiveSourceManifestId()).toBeNull()
+      addSourceManifest({ label: 'a', kind: 'inline', content: '' })
+      const b = addSourceManifest({ label: 'b', kind: 'inline', content: '' })
+      expect(getActiveSourceManifestId()).toBe(b.id)
+    })
+
+    it('returns the chosen manifest, and respects an explicit none', () => {
+      const a = addSourceManifest({ label: 'a', kind: 'inline', content: '' })
+      addSourceManifest({ label: 'b', kind: 'inline', content: '' })
+
+      setActiveSourceManifestId(a.id)
+      expect(getActiveSourceManifestId()).toBe(a.id)
+
+      setActiveSourceManifestId(null)
+      expect(getActiveSourceManifestId()).toBeNull()
+    })
+
+    it('falls back to the newest when the chosen manifest was deleted', () => {
+      const a = addSourceManifest({ label: 'a', kind: 'inline', content: '' })
+      const b = addSourceManifest({ label: 'b', kind: 'inline', content: '' })
+      setActiveSourceManifestId(b.id)
+      deleteSourceManifest(b.id)
+      expect(getActiveSourceManifestId()).toBe(a.id)
+    })
+
+    it('shows hand-made entries always and owned entries only for the active file', () => {
+      expect(isVisibleForActive(undefined, null)).toBe(true)
+      expect(isVisibleForActive(undefined, 'a')).toBe(true)
+      expect(isVisibleForActive('a', 'a')).toBe(true)
+      expect(isVisibleForActive('a', 'b')).toBe(false)
+      expect(isVisibleForActive('a', null)).toBe(false)
+    })
   })
 
   it('builds the expected _quarry object key for a manifest label', () => {

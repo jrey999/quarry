@@ -29,9 +29,9 @@ export function listSourceManifests(): SourceManifest[] {
   return readAll()
 }
 
-export function addSourceManifest(input: Omit<SourceManifest, 'id'>): SourceManifest {
+export function addSourceManifest(input: Omit<SourceManifest, 'id'> & { id?: string }): SourceManifest {
   const manifests = readAll()
-  const manifest: SourceManifest = { id: crypto.randomUUID(), ...input }
+  const manifest: SourceManifest = { ...input, id: input.id ?? crypto.randomUUID() }
   manifests.push(manifest)
   writeAll(manifests)
   return manifest
@@ -52,4 +52,27 @@ export function deleteSourceManifest(id: string): void {
 
 export function sourceManifestObjectKey(label: string): string {
   return `_quarry/sources/${label}.yml`
+}
+
+const ACTIVE_KEY = 'quarry.activeSourceManifest'
+const NO_ACTIVE = ''
+
+// Only one source file is active at a time. Never having chosen (or having deleted the
+// chosen one) falls back to the newest, so a fresh or upgraded install shows something.
+// An explicit "none" is stored as an empty string and is respected.
+export function getActiveSourceManifestId(manifests: SourceManifest[] = readAll()): string | null {
+  const stored = localStorage.getItem(ACTIVE_KEY)
+  if (stored === NO_ACTIVE) return null
+  if (stored !== null && manifests.some((m) => m.id === stored)) return stored
+  return manifests[manifests.length - 1]?.id ?? null
+}
+
+export function setActiveSourceManifestId(id: string | null): void {
+  localStorage.setItem(ACTIVE_KEY, id ?? NO_ACTIVE)
+}
+
+// Entries added by hand have no owner and always show; an entry added by a source file
+// only shows while that file is the active one.
+export function isVisibleForActive(ownerId: string | undefined, activeId: string | null): boolean {
+  return ownerId === undefined || ownerId === activeId
 }

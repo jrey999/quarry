@@ -36,14 +36,26 @@ import {
   registerTable,
   updateRegisteredTable,
   unregisterTable,
+  unregisterTablesByManifest,
   type RegisteredTable,
 } from './lib/registry'
-import { listSavedViews, createView, updateView, deleteView, viewObjectKey, type SavedView } from './lib/views'
+import {
+  listSavedViews,
+  createView,
+  updateView,
+  deleteView,
+  deleteViewsByManifest,
+  viewObjectKey,
+  type SavedView,
+} from './lib/views'
 import { fetchObject, putObject, type S3Entry } from './lib/s3'
 import {
   listSourceManifests,
   addSourceManifest,
   deleteSourceManifest,
+  getActiveSourceManifestId,
+  setActiveSourceManifestId,
+  isVisibleForActive,
   sourceManifestObjectKey,
   type SourceManifest,
 } from './lib/sourceManifests'
@@ -73,23 +85,35 @@ function App() {
   const [loadedQualifiedNames, setLoadedQualifiedNames] = useState<Set<string>>(new Set())
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => listSavedViews())
   const [sourceManifests, setSourceManifests] = useState<SourceManifest[]>(() => listSourceManifests())
+  const [activeManifestId, setActiveManifestId] = useState<string | null>(() => getActiveSourceManifestId())
+
+  // Tables and views added by a source file only show while that file is the active one;
+  // ones added by hand always show. Everything downstream reads these, not the raw lists.
+  const visibleTables = useMemo(
+    () => registeredTables.filter((t) => isVisibleForActive(t.manifestId, activeManifestId)),
+    [registeredTables, activeManifestId],
+  )
+  const visibleViews = useMemo(
+    () => savedViews.filter((v) => isVisibleForActive(v.manifestId, activeManifestId)),
+    [savedViews, activeManifestId],
+  )
 
   const sqlSchema: SQLNamespace = useMemo(() => {
     const flatTables: Record<string, string[]> = {}
     for (const f of files) flatTables[f.tableName] = []
 
     const schemas: Record<string, Record<string, string[]>> = {}
-    for (const t of registeredTables) {
+    for (const t of visibleTables) {
       schemas[t.schemaName] = schemas[t.schemaName] ?? {}
       schemas[t.schemaName][t.tableName] = []
     }
-    for (const v of savedViews) {
+    for (const v of visibleViews) {
       schemas[v.schemaName] = schemas[v.schemaName] ?? {}
       schemas[v.schemaName][v.viewName] = []
     }
 
     return { ...flatTables, ...schemas }
-  }, [files, registeredTables, savedViews])
+  }, [files, visibleTables, visibleViews])
 
   async function handleFiles(newFiles: File[]) {
     setLoadingFiles(true)
@@ -131,18 +155,18 @@ function App() {
   // click it in the Schema panel first — the underlying file (or, for a view, whatever
   // it in turn references) is loaded on demand, recursively, the same way clicking it would.
   async function ensureQualifiedRefsLoaded(query: string, processing: Set<string> = new Set()): Promise<void> {
-    if (registeredTables.length === 0 && savedViews.length === 0) return
+    if (visibleTables.length === 0 && visibleViews.length === 0) return
     for (const ref of extractQualifiedRefs(query)) {
       if (loadedQualifiedNames.has(ref) || processing.has(ref)) continue
       processing.add(ref)
 
-      const table = registeredTables.find((t) => `${t.schemaName}.${t.tableName}` === ref)
+      const table = visibleTables.find((t) => `${t.schemaName}.${t.tableName}` === ref)
       if (table) {
         await loadRegisteredTable(table)
         continue
       }
 
-      const view = savedViews.find((v) => `${v.schemaName}.${v.viewName}` === ref)
+      const view = visibleViews.find((v) => `${v.schemaName}.${v.viewName}` === ref)
       if (view) {
         await ensureQualifiedRefsLoaded(view.sql, processing)
         await createOrReplaceView(view.schemaName, view.viewName, view.sql)
@@ -341,10 +365,20 @@ function App() {
     }
   }
 
+  // Switching the active source file changes which same-named tables and views are visible,
+  // so anything already materialized in DuckDB under those names has to be loaded again.
+  function handleSetActiveManifest(id: string | null) {
+    setActiveSourceManifestId(id)
+    setActiveManifestId(id)
+    setLoadedQualifiedNames(new Set())
+  }
+
   async function handleAddInlineManifest(label: string, content: string): Promise<ManifestApplyOutcome> {
-    const outcome = applyManifest(content, bucketConnections)
-    addSourceManifest({ label, kind: 'inline', content })
+    const id = crypto.randomUUID()
+    const outcome = applyManifest(content, bucketConnections, id)
+    addSourceManifest({ id, label, kind: 'inline', content })
     setSourceManifests(listSourceManifests())
+    handleSetActiveManifest(id)
     refreshRegistryState()
     await syncManifestToWriterBucket(label, content)
     return outcome
@@ -359,9 +393,11 @@ function App() {
     if (!conn) throw new Error('Select a bucket connection first.')
     const bytes = await fetchObject(conn, key)
     const text = new TextDecoder().decode(bytes)
-    const outcome = applyManifest(text, bucketConnections)
-    addSourceManifest({ label, kind: 'reference', connectionId, key })
+    const id = crypto.randomUUID()
+    const outcome = applyManifest(text, bucketConnections, id)
+    addSourceManifest({ id, label, kind: 'reference', connectionId, key })
     setSourceManifests(listSourceManifests())
+    handleSetActiveManifest(id)
     refreshRegistryState()
     return outcome
   }
@@ -372,16 +408,37 @@ function App() {
     return outcome
   }
 
+  // A deleted source file takes its tables and views with it; otherwise they'd be owned
+  // by something that no longer exists and could never be shown or removed.
   function handleDeleteManifest(id: string) {
     deleteSourceManifest(id)
-    setSourceManifests(listSourceManifests())
+    unregisterTablesByManifest(id)
+    deleteViewsByManifest(id)
+    const remaining = listSourceManifests()
+    setSourceManifests(remaining)
+    setActiveManifestId(getActiveSourceManifestId(remaining))
+    setLoadedQualifiedNames(new Set())
+    refreshRegistryState()
   }
 
+  // Re-applying on startup is idempotent, and it is what stamps ownership onto entries
+  // that were applied before source files tracked which tables and views they own.
   useEffect(() => {
-    const referenceManifests = listSourceManifests().filter((m) => m.kind === 'reference')
+    const manifests = listSourceManifests()
+    const connections = listBucketConnections()
+    for (const manifest of manifests) {
+      if (manifest.kind !== 'inline' || !manifest.content) continue
+      try {
+        applyManifest(manifest.content, connections, manifest.id)
+      } catch {
+        // An inline file that no longer parses is left alone rather than blocking startup.
+      }
+    }
+    refreshRegistryState()
+
+    const referenceManifests = manifests.filter((m) => m.kind === 'reference')
     if (referenceManifests.length === 0) return
     ;(async () => {
-      const connections = listBucketConnections()
       for (const manifest of referenceManifests) {
         try {
           await refreshReferenceManifest(manifest, connections)
@@ -427,8 +484,8 @@ function App() {
           <section>
             <h2>Schema</h2>
             <SchemaRegistryPanel
-              tables={registeredTables}
-              views={savedViews}
+              tables={visibleTables}
+              views={visibleViews}
               connections={bucketConnections}
               onUpdateTable={handleUpdateRegisteredTable}
               onDeleteTable={handleDeleteRegisteredTable}
@@ -444,6 +501,8 @@ function App() {
             <h2>Sources</h2>
             <SourceManifestsPanel
               manifests={sourceManifests}
+              activeId={activeManifestId}
+              onSetActive={handleSetActiveManifest}
               connections={bucketConnections}
               onAddInline={handleAddInlineManifest}
               onAddReference={handleAddReferenceManifest}

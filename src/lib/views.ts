@@ -3,6 +3,8 @@ export interface SavedView {
   schemaName: string
   viewName: string
   sql: string
+  // The source file that added this view; absent for views saved by hand.
+  manifestId?: string
 }
 
 const STORAGE_KEY = 'quarry.savedViews'
@@ -37,13 +39,17 @@ export function updateView(id: string, input: Omit<SavedView, 'id'>): void {
   const views = readAll()
   const index = views.findIndex((v) => v.id === id)
   if (index !== -1) {
-    views[index] = { id, ...input }
+    views[index] = { ...views[index], ...input, id }
     writeAll(views)
   }
 }
 
 export function deleteView(id: string): void {
   writeAll(readAll().filter((v) => v.id !== id))
+}
+
+export function deleteViewsByManifest(manifestId: string): void {
+  writeAll(readAll().filter((v) => v.manifestId !== manifestId))
 }
 
 // Where a view's definition gets mirrored in the writer bucket, when one is configured.
