@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { SQLNamespace } from '@codemirror/lang-sql'
 import { FileDropZone } from './components/FileDropZone'
 import { FilesPanel, type LoadedFileEntry } from './components/FilesPanel'
@@ -40,6 +40,15 @@ import {
 } from './lib/registry'
 import { listSavedViews, createView, updateView, deleteView, viewObjectKey, type SavedView } from './lib/views'
 import { fetchObject, putObject, type S3Entry } from './lib/s3'
+import {
+  listSourceManifests,
+  addSourceManifest,
+  deleteSourceManifest,
+  sourceManifestObjectKey,
+  type SourceManifest,
+} from './lib/sourceManifests'
+import { applyManifest, refreshReferenceManifest, type ManifestApplyOutcome } from './lib/manifestApply'
+import { SourceManifestsPanel } from './components/SourceManifestsPanel'
 
 interface CurrentFile {
   label: string
@@ -63,6 +72,7 @@ function App() {
   const [loadingRegisteredId, setLoadingRegisteredId] = useState<string | null>(null)
   const [loadedQualifiedNames, setLoadedQualifiedNames] = useState<Set<string>>(new Set())
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => listSavedViews())
+  const [sourceManifests, setSourceManifests] = useState<SourceManifest[]>(() => listSourceManifests())
 
   const sqlSchema: SQLNamespace = useMemo(() => {
     const flatTables: Record<string, string[]> = {}
@@ -314,6 +324,77 @@ function App() {
     }
   }
 
+  function refreshRegistryState() {
+    setRegisteredTables(listRegisteredTables())
+    setSavedViews(listSavedViews())
+  }
+
+  async function syncManifestToWriterBucket(label: string, content: string) {
+    const writer = getWriterBucket()
+    if (!writer) return
+    try {
+      await putObject(writer, sourceManifestObjectKey(label), new TextEncoder().encode(content))
+    } catch (err) {
+      setError(
+        `Source file saved locally, but syncing to ${writer.bucket} failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  async function handleAddInlineManifest(label: string, content: string): Promise<ManifestApplyOutcome> {
+    const outcome = applyManifest(content, bucketConnections)
+    addSourceManifest({ label, kind: 'inline', content })
+    setSourceManifests(listSourceManifests())
+    refreshRegistryState()
+    await syncManifestToWriterBucket(label, content)
+    return outcome
+  }
+
+  async function handleAddReferenceManifest(
+    label: string,
+    connectionId: string,
+    key: string,
+  ): Promise<ManifestApplyOutcome> {
+    const conn = bucketConnections.find((c) => c.id === connectionId)
+    if (!conn) throw new Error('Select a bucket connection first.')
+    const bytes = await fetchObject(conn, key)
+    const text = new TextDecoder().decode(bytes)
+    const outcome = applyManifest(text, bucketConnections)
+    addSourceManifest({ label, kind: 'reference', connectionId, key })
+    setSourceManifests(listSourceManifests())
+    refreshRegistryState()
+    return outcome
+  }
+
+  async function handleRefreshManifest(manifest: SourceManifest): Promise<ManifestApplyOutcome> {
+    const outcome = await refreshReferenceManifest(manifest, bucketConnections)
+    refreshRegistryState()
+    return outcome
+  }
+
+  function handleDeleteManifest(id: string) {
+    deleteSourceManifest(id)
+    setSourceManifests(listSourceManifests())
+  }
+
+  useEffect(() => {
+    const referenceManifests = listSourceManifests().filter((m) => m.kind === 'reference')
+    if (referenceManifests.length === 0) return
+    ;(async () => {
+      const connections = listBucketConnections()
+      for (const manifest of referenceManifests) {
+        try {
+          await refreshReferenceManifest(manifest, connections)
+        } catch {
+          // Best-effort: a manifest whose bucket connection is gone or unreachable
+          // at startup shouldn't block the app — the user can refresh it manually.
+        }
+      }
+      refreshRegistryState()
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return (
     <div className="app">
       <header>
@@ -357,6 +438,17 @@ function App() {
               onDeleteView={handleDeleteView}
               onOpenView={handleOpenView}
               loadingId={loadingRegisteredId}
+            />
+          </section>
+          <section>
+            <h2>Sources</h2>
+            <SourceManifestsPanel
+              manifests={sourceManifests}
+              connections={bucketConnections}
+              onAddInline={handleAddInlineManifest}
+              onAddReference={handleAddReferenceManifest}
+              onRefresh={handleRefreshManifest}
+              onDelete={handleDeleteManifest}
             />
           </section>
           <section>
