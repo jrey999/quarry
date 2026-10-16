@@ -172,6 +172,27 @@ th {
   top: 0;
 }
 
+.sort-button {
+  all: unset;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.sort-button:focus-visible {
+  outline: 2px solid #4a8af4;
+}
+
+.sort-indicator {
+  margin-left: 4px;
+  font-size: 10px;
+  color: #bbb;
+}
+
+th[aria-sort='ascending'] .sort-indicator,
+th[aria-sort='descending'] .sort-indicator {
+  color: #333;
+}
+
 .col-type {
   display: block;
   font-weight: normal;
