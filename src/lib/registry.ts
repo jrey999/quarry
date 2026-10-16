@@ -52,3 +52,8 @@ export function unregisterTable(id: string): void {
 export function unregisterTablesByManifest(manifestId: string): void {
   writeAll(readAll().filter((t) => t.manifestId !== manifestId))
 }
+
+export function unregisterTables(ids: string[]): void {
+  const doomed = new Set(ids)
+  writeAll(readAll().filter((t) => !doomed.has(t.id)))
+}

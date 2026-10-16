@@ -36,6 +36,7 @@ import {
   registerTable,
   updateRegisteredTable,
   unregisterTable,
+  unregisterTables,
   unregisterTablesByManifest,
   type RegisteredTable,
 } from './lib/registry'
@@ -44,6 +45,7 @@ import {
   createView,
   updateView,
   deleteView,
+  deleteViews,
   deleteViewsByManifest,
   viewObjectKey,
   type SavedView,
@@ -331,6 +333,12 @@ function App() {
     }
   }
 
+  function handleDeleteSchema(tableIds: string[], viewIds: string[]) {
+    unregisterTables(tableIds)
+    deleteViews(viewIds)
+    refreshRegistryState()
+  }
+
   function handleDeleteView(id: string) {
     deleteView(id)
     setSavedViews(listSavedViews())
@@ -494,6 +502,7 @@ function App() {
               onUpdateView={handleUpdateView}
               onDeleteView={handleDeleteView}
               onOpenView={handleOpenView}
+              onDeleteSchema={handleDeleteSchema}
               loadingId={loadingRegisteredId}
             />
           </section>

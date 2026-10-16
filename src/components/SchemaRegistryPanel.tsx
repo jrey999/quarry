@@ -18,6 +18,7 @@ interface Props {
   onUpdateView: (id: string, schemaName: string, viewName: string, sql: string) => void
   onDeleteView: (id: string) => void
   onOpenView: (view: SavedView) => void
+  onDeleteSchema: (tableIds: string[], viewIds: string[]) => void
   loadingId: string | null
 }
 
@@ -32,6 +33,7 @@ export function SchemaRegistryPanel({
   onUpdateView,
   onDeleteView,
   onOpenView,
+  onDeleteSchema,
   loadingId,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -71,6 +73,15 @@ export function SchemaRegistryPanel({
       }
     }
     setEditingId(null)
+  }
+
+  function deleteSchema(schemaName: string, schemaEntries: Entry[]) {
+    const tableIds = schemaEntries.filter((e) => e.kind === 'table').map((e) => e.id)
+    const viewIds = schemaEntries.filter((e) => e.kind === 'view').map((e) => e.id)
+    const count = schemaEntries.length
+    if (window.confirm(`Delete all ${count} table(s) and view(s) in "${schemaName}"? This can't be undone.`)) {
+      onDeleteSchema(tableIds, viewIds)
+    }
   }
 
   function submitCreateView() {
@@ -116,7 +127,16 @@ export function SchemaRegistryPanel({
 
       {Array.from(bySchema.entries()).map(([schemaName, schemaEntries]) => (
         <div key={schemaName} className="registry-schema-group">
-          <div className="registry-schema-name">{schemaName}</div>
+          <div className="registry-schema-name">
+            <span>{schemaName}</span>
+            <button
+              className="registry-schema-delete"
+              onClick={() => deleteSchema(schemaName, schemaEntries)}
+              title={`Delete every table and view in ${schemaName}`}
+            >
+              Delete all
+            </button>
+          </div>
           {schemaEntries.map((entry) => {
             const isEditing = editingId === entry.id
             const conn = entry.kind === 'table' ? connectionsById.get(entry.data.connectionId) : undefined

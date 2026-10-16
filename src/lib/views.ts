@@ -48,6 +48,11 @@ export function deleteView(id: string): void {
   writeAll(readAll().filter((v) => v.id !== id))
 }
 
+export function deleteViews(ids: string[]): void {
+  const doomed = new Set(ids)
+  writeAll(readAll().filter((v) => !doomed.has(v.id)))
+}
+
 export function deleteViewsByManifest(manifestId: string): void {
   writeAll(readAll().filter((v) => v.manifestId !== manifestId))
 }
