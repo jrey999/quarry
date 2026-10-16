@@ -569,7 +569,8 @@ th {
 
 .manifest-mode-toggle {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 4px;
   font-size: 12px;
   color: #444;
 }
@@ -577,7 +578,14 @@ th {
 .manifest-mode-toggle label {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+}
+
+.manifest-form .manifest-mode-toggle input {
+  width: auto;
+  flex: none;
+  margin: 0;
+  padding: 0;
 }
 
 .manifest-row {
